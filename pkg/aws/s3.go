@@ -45,6 +45,6 @@ func StateUpload(uploadURL, filePath string) error {
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	fmt.Println("File uploaded successfully")
+	fmt.Println("Vulnerability information uploaded successfully")
 	return nil
 }

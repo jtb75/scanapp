@@ -3,9 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"scanapp/pkg/aws"
 	"scanapp/pkg/config" // Adjust the import path based on your module's name and structure
+	"scanapp/pkg/environment"
+	"scanapp/pkg/vulnerability"
 	"scanapp/pkg/wizapi" // Adjust the import path based on your module's name and structure
+	"scanapp/pkg/wizcli"
 	"strings"
 	"time"
 )
@@ -42,51 +47,51 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
+	wizCliPath, err := wizcli.SetupEnvironment()
+	if err != nil {
+		fmt.Println("Failed to set up wizcli environment:", err)
+		return
+	}
+	defer func() {
+		if err := wizcli.CleanupEnvironment(wizCliPath); err != nil {
+			fmt.Println("Warning: Failed to clean up environment:", err)
+		}
+	}()
+
+	// Set the WIZ_DIR environment variable to the directory holding wizcli
+	wizDir := filepath.Dir(wizCliPath)
+	if err := os.Setenv("WIZ_DIR", wizDir); err != nil {
+		fmt.Println("Failed to set WIZ_DIR environment variable:", err)
+		return
+	}
+	//fmt.Printf("WIZ_DIR set to: %s\n", wizDir)
+
+	// Authenticate wizcli using the credentials from the config
+	authMessage, err := wizcli.AuthenticateWizcli(wizCliPath, cfg.WizClientID, cfg.WizClientSecret)
+	if err != nil {
+		fmt.Println("Failed to authenticate wizcli:", err)
+		return
+	}
+
+	fmt.Println(authMessage)
+	//fmt.Println("wizcli is set up and authenticated at:", wizCliPath)
+
+	// Use the appropriate root path or leave empty for Windows
+	rootPath := "/"
+	if runtime.GOOS == "windows" {
+		rootPath = ""
+	}
+
+	// Get top level directories
+	directories, err := environment.ListTopLevelDirectories(rootPath)
+	if err != nil {
+		fmt.Println("Error listing directories:", err)
+		return
+	}
 	/*
-		wizCliPath, err := wizcli.SetupEnvironment()
-		if err != nil {
-			fmt.Println("Failed to set up wizcli environment:", err)
-			return
-		}
-		defer func() {
-			if err := wizcli.CleanupEnvironment(wizCliPath); err != nil {
-				fmt.Println("Warning: Failed to clean up environment:", err)
-			}
-		}()
-
-		// Set the WIZ_DIR environment variable to the directory holding wizcli
-		wizDir := filepath.Dir(wizCliPath)
-		if err := os.Setenv("WIZ_DIR", wizDir); err != nil {
-			fmt.Println("Failed to set WIZ_DIR environment variable:", err)
-			return
-		}
-		fmt.Printf("WIZ_DIR set to: %s\n", wizDir)
-
-		// Authenticate wizcli using the credentials from the config
-		authMessage, err := wizcli.AuthenticateWizcli(wizCliPath, cfg.WizClientID, cfg.WizClientSecret)
-		if err != nil {
-			fmt.Println("Failed to authenticate wizcli:", err)
-			return
-		}
-
-		fmt.Println(authMessage)
-		fmt.Println("wizcli is set up and authenticated at:", wizCliPath)
-
-		// Use the appropriate root path or leave empty for Windows
-		rootPath := "/"
-		if runtime.GOOS == "windows" {
-			rootPath = ""
-		}
-
-		// Get top level directories
-		directories, err := environment.ListTopLevelDirectories(rootPath)
-		if err != nil {
-			fmt.Println("Error listing directories:", err)
-			return
-		}
-
 		fmt.Println("Top-level directories:")
-		directories = []string{"/tmp/scandir"}
+		//directories = []string{"/tmp/scandir"}
 		for _, dir := range directories {
 			fmt.Println(dir)
 		}
@@ -100,106 +105,83 @@ func main() {
 		return
 	}
 	fmt.Println("Authenticated with WizAPI successfully")
-	/*
-		   // Call GraphResourceSearch to execute the GraphQL query
-		   graphQLResourceResponse, err := apiClient.GraphResourceSearch(cfg)
 
-		   	if err != nil {
-		   		fmt.Println("Error executing GraphResourceSearch:", err)
-		   		return
-		   	}
+	// Call GraphResourceSearch to execute the GraphQL query
+	graphQLResourceResponse, err := apiClient.GraphResourceSearch(cfg)
 
-		   // Process the GraphQL response as needed
-		   // graphQLResponse contains the result of the query
-		   fmt.Println("Total Resource Count:", graphQLResourceResponse.Data.GraphSearch.TotalCount)
-		   // Exit if the resource does not equal exactly 1
+	if err != nil {
+		fmt.Println("Error executing GraphResourceSearch:", err)
+		return
+	}
 
-		   	if graphQLResourceResponse.Data.GraphSearch.TotalCount != 1 {
-		   		fmt.Println("Total Resource Count is not equal to 1. Exiting...")
-		   		os.Exit(1) // Exit with a non-zero status code to indicate an error
-		   	}
+	//fmt.Println("Total Resource Count:", graphQLResourceResponse.Data.GraphSearch.TotalCount)
 
-		   // Handle any errors in the response
+	if graphQLResourceResponse.Data.GraphSearch.TotalCount != 1 {
+		fmt.Println("Total Resource Count is not equal to 1. Exiting...")
+		os.Exit(1) // Exit with a non-zero status code to indicate an error
+	}
 
-		   	if len(graphQLResourceResponse.Errors) > 0 {
-		   		fmt.Println("GraphQL errors:", graphQLResourceResponse.Errors)
-		   		return
-		   	}
+	// Handle any errors in the response
 
-		   	jsonOutputs, err := wizcli.ScanDirectories(directories, wizCliPath)
+	if len(graphQLResourceResponse.Errors) > 0 {
+		fmt.Println("GraphQL errors:", graphQLResourceResponse.Errors)
+		return
+	}
 
-		   		if err != nil {
-		   			fmt.Println("Error scanning directories:", err)
-		   			return // or handle the error as needed
-		   		}
+	jsonOutputs, err := wizcli.ScanDirectories(directories, wizCliPath)
 
-		   	historicalState, err := vulnerability.OpenHistoricalState()
+	if err != nil {
+		fmt.Println("Error scanning directories:", err)
+		return // or handle the error as needed
+	}
 
-		   		if err != nil {
-		   			fmt.Println("Error opening historical state:", err)
-		   			return
-		   		}
+	historicalState, err := vulnerability.OpenHistoricalState()
 
-		   	// Process the data
-		   	currentState, err := vulnerability.ProcessVulnerabilities(jsonOutputs, cfg, historicalState)
+	if err != nil {
+		fmt.Println("Error opening historical state:", err)
+		return
+	}
 
-		   		if err != nil {
-		   			fmt.Println("Failed to transform scan results to payload:", err)
-		   		}
+	// Process the data
+	currentState, err := vulnerability.ProcessVulnerabilities(jsonOutputs, cfg, historicalState)
 
-		   	// Check if either currentState or historicalState is empty
+	if err != nil {
+		fmt.Println("Failed to transform scan results to payload:", err)
+	}
 
-		   		if currentState == nil || len(currentState.DataSources) == 0 || historicalState == nil || len(historicalState.DataSources) == 0 {
-		   			fmt.Println("Error: Both historicalState and currentState must be populated")
-		   			return // terminate the program
-		   		}
+	// Check if either currentState or historicalState is empty
 
-		   	// Update the historical state with any new findings from the current state
-		   	updatedHistoricalState, err := vulnerability.UpdateHistoricalState(historicalState, currentState)
+	if currentState == nil || len(currentState.DataSources) == 0 || historicalState == nil || len(historicalState.DataSources) == 0 {
+		fmt.Println("Error: Both historicalState and currentState must be populated")
+		return // terminate the program
+	}
 
-		   		if err != nil {
-		   			fmt.Println("Error updating historical state:", err)
-		   			return
-		   		}
+	// Update the historical state with any new findings from the current state
+	updatedHistoricalState, err := vulnerability.UpdateHistoricalState(historicalState, currentState)
 
-		   	// Write historicalState to the file
-		   	err = vulnerability.WriteHistoricalState(updatedHistoricalState)
+	if err != nil {
+		fmt.Println("Error updating historical state:", err)
+		return
+	}
 
-		   		if err != nil {
-		   			fmt.Println("Error writing historical state:", err)
-		   			return
-		   		}
+	// Write historicalState to the file
+	err = vulnerability.WriteHistoricalState(updatedHistoricalState)
 
-		   	// Write currentState to the file
-		   	err = vulnerability.WriteCurrentState(currentState)
+	if err != nil {
+		fmt.Println("Error writing historical state:", err)
+		return
+	}
 
-		   		if err != nil {
-		   			fmt.Println("Error writing current state:", err)
-		   			return
-		   		}
+	// Write currentState to the file
+	err = vulnerability.WriteCurrentState(currentState)
 
-		   	fmt.Println("Current and historical states written successfully")
+	if err != nil {
+		fmt.Println("Error writing current state:", err)
+		return
+	}
 
-		historicalState, err := vulnerability.OpenHistoricalState()
+	//fmt.Println("Current and historical states written successfully")
 
-		if err != nil {
-			fmt.Println("Error opening historical state:", err)
-			return
-		}
-		currentState, err := vulnerability.OpenCurrentState()
-
-		if err != nil {
-			fmt.Println("Error opening current state:", err)
-			return
-		}
-
-		// Check if either currentState or historicalState is empty
-
-		if currentState == nil || len(currentState.DataSources) == 0 || historicalState == nil || len(historicalState.DataSources) == 0 {
-			fmt.Println("Error: Both historicalState and currentState must be populated")
-			return // terminate the program
-		}
-	*/
 	// The filename you wish to upload
 	filename := "state-current.json"
 
@@ -209,11 +191,6 @@ func main() {
 		fmt.Println("Error requesting security scan upload:", err)
 		return
 	}
-
-	// Process the response as needed
-	fmt.Printf("Upload ID: %s\n", uploadResponse.Data.RequestSecurityScanUpload.Upload.ID)
-	fmt.Printf("Upload URL: %s\n", uploadResponse.Data.RequestSecurityScanUpload.Upload.URL)
-	fmt.Printf("System Activity ID: %s\n", uploadResponse.Data.RequestSecurityScanUpload.Upload.SystemActivityId)
 
 	// Call StateUpload to upload the file
 	err = aws.StateUpload(uploadResponse.Data.RequestSecurityScanUpload.Upload.URL, filename)
@@ -238,13 +215,16 @@ func main() {
 				fmt.Printf("Error querying system activity: %v\n", err)
 				return
 			}
+		} else if systemActivityResponse.Data.SystemActivity.Status == "IN_PROGRESS" && attempt < maxRetries-1 {
+			fmt.Printf("Processing upload, retrying in %d seconds...\n", retryDelay)
+			time.Sleep(time.Duration(retryDelay) * time.Second)
+			continue
 		}
 		break
 	}
 
 	if err == nil {
 		fmt.Printf("System Activity Status: %s\n", systemActivityResponse.Data.SystemActivity.Status)
-		// ... handle other parts of the response as needed ...
 	} else {
 		fmt.Println("Failed to query system activity after retries.")
 	}
